@@ -1,0 +1,17 @@
+node_modules/
+.webpack/
+out/
+coverage/
+vendor/scrcpy/*/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision

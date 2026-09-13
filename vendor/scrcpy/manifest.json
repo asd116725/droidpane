@@ -1,0 +1,20 @@
+{
+  "version": "4.1",
+  "targets": {
+    "darwin-arm64": {
+      "archive": "scrcpy-macos-aarch64-v4.1.tar.gz",
+      "url": "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-macos-aarch64-v4.1.tar.gz",
+      "sha256": "20fd47c9014dd5e0fa77091f3cb7adbda8445a360c4584aeaa0150b5b3988ff3"
+    },
+    "darwin-x64": {
+      "archive": "scrcpy-macos-x86_64-v4.1.tar.gz",
+      "url": "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-macos-x86_64-v4.1.tar.gz",
+      "sha256": "ee2a7223bc8dbdc4f482db1134bcf441178dafb833492b71ca4c22090c58ce72"
+    },
+    "win32-x64": {
+      "archive": "scrcpy-win64-v4.1.zip",
+      "url": "https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-win64-v4.1.zip",
+      "sha256": "5b12172b3264b2889f4583ee64752ce832e29bc8b1089dca81093459697165db"
+    }
+  }
+}

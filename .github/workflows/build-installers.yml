@@ -1,0 +1,68 @@
+name: 构建安装包
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  macos:
+    name: macOS ${{ matrix.arch }} DMG
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 配置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+      - name: 检查类型与代码规范
+        run: npm run typecheck && npm run lint
+      - name: 运行测试
+        run: npm test -- --no-watchman
+      - name: 构建 ad-hoc 签名 DMG
+        run: npm run make -- --arch=${{ matrix.arch }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: 校验应用签名
+        run: codesign --verify --deep --strict --verbose=2 "out/DroidPane-darwin-${{ matrix.arch }}/DroidPane.app"
+      - name: 上传 DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: DroidPane-macOS-${{ matrix.arch }}
+          path: out/make/**/*.dmg
+
+  windows:
+    name: Windows x64 MSI
+    runs-on: windows-2022
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 配置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+          cache: npm
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+      - name: 安装 WiX Toolset v3
+        run: choco install wixtoolset --version=3.14.0 -y --no-progress
+      - name: 检查类型与代码规范
+        run: npm run typecheck && npm run lint
+      - name: 运行测试
+        run: npm test -- --no-watchman
+      - name: 构建未签名 MSI
+        run: npm run make -- --arch=x64
+      - name: 上传安装程序
+        uses: actions/upload-artifact@v4
+        with:
+          name: DroidPane-Windows-x64
+          path: out/make/**/*.msi
