@@ -7,12 +7,18 @@ on:
         description: 要构建的分支、标签或提交
         required: false
         type: string
+      platform:
+        description: 构建平台
+        type: choice
+        default: all
+        options: [all, macos, windows]
   push:
     tags:
       - "v*"
 
 jobs:
   macos:
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'macos' }}
     name: macOS ${{ matrix.arch }} DMG
     runs-on: macos-14
     strategy:
@@ -60,6 +66,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == 'windows' }}
     name: Windows x64 MSI
     runs-on: windows-2022
     steps:
@@ -94,7 +101,7 @@ jobs:
           $view.Execute()
           $actualVersion = $view.Fetch().StringData(1)
           $view.Close()
-          if ($actualVersion -ne $expectedVersion) { throw "MSI version mismatch: $actualVersion" }
+          if ($actualVersion -notin @($expectedVersion, "$expectedVersion.0")) { throw "MSI version mismatch: $actualVersion" }
           node -e "const fs=require('fs');const b=fs.readFileSync('out/DroidPane-win32-x64/DroidPane.exe');if(b.readUInt16LE(b.readUInt32LE(60)+4)!==0x8664)throw Error('Expected x64 PE');"
       - name: 上传安装程序
         uses: actions/upload-artifact@v4
