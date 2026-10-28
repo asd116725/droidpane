@@ -34,7 +34,8 @@ jobs:
       - name: 检查类型与代码规范
         run: npm run typecheck && npm run lint
       - name: 运行测试
-        run: npm test -- --no-watchman
+        # CI 中表单逐字输入较慢，保留全部断言并给予单例充足时间。
+        run: npm test -- --no-watchman --testTimeout=20000
       - name: 构建 ad-hoc 签名 DMG
         run: npm run make -- --arch=${{ matrix.arch }}
         env:
@@ -78,7 +79,7 @@ jobs:
       - name: 检查类型与代码规范
         run: npm run typecheck && npm run lint
       - name: 运行测试
-        run: npm test -- --no-watchman
+        run: npm test -- --no-watchman --testTimeout=20000
       - name: 构建未签名 MSI
         run: npm run make -- --arch=x64
       - name: 校验 MSI 版本与应用架构
