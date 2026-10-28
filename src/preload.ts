@@ -24,6 +24,24 @@ function subscribe<T>(
 
 /** 向渲染进程公开的最小权限 API。 */
 const api: AdbStudioApi = {
+  getWirelessState: () => ipcRenderer.invoke(ipcChannels.getWirelessState),
+  onWirelessStateChanged: (listener) => subscribe(ipcChannels.wirelessStateChanged, listener),
+  discoverWirelessDevices: () => ipcRenderer.invoke(ipcChannels.discoverWirelessDevices),
+  pairWirelessDevice: (input) => ipcRenderer.invoke(ipcChannels.pairWirelessDevice, input),
+  connectWirelessDevice: (input) => ipcRenderer.invoke(ipcChannels.connectWirelessDevice, input),
+  cancelWirelessOperation: () => ipcRenderer.invoke(ipcChannels.cancelWirelessOperation),
+  disconnectWirelessDevice: (serial) => ipcRenderer.invoke(ipcChannels.disconnectWirelessDevice, serial),
+  renameWirelessProfile: (id, name) => ipcRenderer.invoke(ipcChannels.renameWirelessProfile, { id, name }),
+  removeWirelessProfile: (id) => ipcRenderer.invoke(ipcChannels.removeWirelessProfile, id),
+  getMirrorRecoveryState: () => ipcRenderer.invoke(ipcChannels.getMirrorRecoveryState),
+  onMirrorRecoveryStateChanged: (listener) => subscribe(ipcChannels.mirrorRecoveryStateChanged, listener),
+  retryMirrorRecovery: () => ipcRenderer.invoke(ipcChannels.retryMirrorRecovery),
+  cancelMirrorRecovery: () => ipcRenderer.invoke(ipcChannels.cancelMirrorRecovery),
+  getWindowPresentation: () => ipcRenderer.invoke(ipcChannels.getWindowPresentation),
+  onWindowPresentationChanged: (listener) => subscribe(ipcChannels.windowPresentationChanged, listener),
+  setWindowMode: (mode) => ipcRenderer.invoke(ipcChannels.setWindowMode, mode),
+  setWindowAlwaysOnTop: (enabled) => ipcRenderer.invoke(ipcChannels.setWindowAlwaysOnTop, enabled),
+  setConnectionPanelOpen: (open) => ipcRenderer.invoke(ipcChannels.setConnectionPanelOpen, open),
   getDevices: () => ipcRenderer.invoke(ipcChannels.getDevices),
   refreshDevices: () => ipcRenderer.invoke(ipcChannels.refreshDevices),
   onDevicesChanged: (listener: (devices: DeviceInfo[]) => void) =>

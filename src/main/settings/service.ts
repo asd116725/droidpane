@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AppSettings } from "../../shared/types";
+import type { WindowPresentationPreferences, WirelessDeviceProfile } from "../../shared/connection";
 import {
   parseSettings,
   parseSettingsUpdate
@@ -26,17 +27,15 @@ export function createDefaultSettings(
 
 /** 创建互不共享引用的设置副本。 */
 function cloneSettings(settings: AppSettings): AppSettings {
-  return {
-    preset: { ...settings.preset },
-    audioMonitor: { ...settings.audioMonitor },
-    recordingsDirectory: settings.recordingsDirectory
-  };
+  return structuredClone(settings);
 }
 
 /** 在用户数据目录读写应用设置。 */
 export class SettingsService {
   /** 当前内存设置。 */
   private settings: AppSettings;
+  /** 串行合并领域更新，避免窗口和录制偏好覆盖彼此。 */
+  private writeQueue: Promise<unknown> = Promise.resolve();
 
   /** 创建设置服务。 */
   constructor(
@@ -80,18 +79,30 @@ export class SettingsService {
   async setPreferences(value: unknown): Promise<AppSettings> {
     /** 已校验的可修改设置。 */
     const preferences = parseSettingsUpdate(value);
-    return this.persist({
-      ...this.settings,
-      ...preferences
-    });
+    return this.update(preferences);
   }
 
   /** 更新由主进程系统选择器产生的录制目录。 */
   async setRecordingsDirectory(directory: string): Promise<AppSettings> {
-    return this.persist({
-      ...this.settings,
-      recordingsDirectory: path.normalize(directory)
-    });
+    return this.update({ recordingsDirectory: path.normalize(directory) });
+  }
+
+  /** 设备档案由主进程连接服务生成。 */
+  setWirelessProfiles(profiles: WirelessDeviceProfile[]): Promise<AppSettings> {
+    return this.update({ wirelessProfiles: profiles });
+  }
+
+  /** 窗口偏好只接受主进程实际窗口状态。 */
+  setWindowPresentation(value: WindowPresentationPreferences): Promise<AppSettings> {
+    return this.update({ windowPresentation: value });
+  }
+
+  /** 等前一笔写入完成后再合并当前快照，失败不阻断后续保存。 */
+  private update(patch: Partial<AppSettings>): Promise<AppSettings> {
+    const snapshot = structuredClone(patch);
+    const task = this.writeQueue.then(() => this.persist({ ...this.settings, ...snapshot }));
+    this.writeQueue = task.catch(() => undefined);
+    return task;
   }
 
   /** 校验并原子保存完整设置。 */

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { windowPresentationSchema, wirelessProfileSchema } from "./connection-validation";
 import type {
   AppSettings,
   AppSettingsUpdate,
@@ -111,6 +112,8 @@ const settingsSchema = z
   .object({
     preset: recordingPresetSchema,
     audioMonitor: audioMonitorSettingsSchema,
+    wirelessProfiles: z.array(wirelessProfileSchema).max(100).optional(),
+    windowPresentation: windowPresentationSchema.optional(),
     recordingsDirectory: z
       .string()
       .min(1)

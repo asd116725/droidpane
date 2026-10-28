@@ -1,3 +1,5 @@
+import type { ConnectionApi, WindowPresentationPreferences, WirelessDeviceProfile } from "./connection";
+
 /** 安卓设备连接状态。 */
 export type DeviceStatus = "available" | "unauthorized" | "offline";
 
@@ -8,6 +10,8 @@ export type DeviceConnectionType = "usb" | "network" | "emulator";
 export interface DeviceInfo {
   /** ADB 序列号。 */
   serial: string;
+  /** 手机报告的硬件标识，用于核实无线地址变化后的原设备。 */
+  identity?: string;
   /** 设备型号。 */
   model: string;
   /** Android 系统版本。 */
@@ -302,6 +306,10 @@ export interface RecordingDeleteResult {
 export interface AppSettings extends AppSettingsUpdate {
   /** 录制文件存储目录。 */
   recordingsDirectory: string;
+  /** 仅保存成功连接后的设备档案，兼容旧版设置。 */
+  wirelessProfiles?: WirelessDeviceProfile[];
+  /** 两种窗口模式的位置和紧凑置顶偏好。 */
+  windowPresentation?: WindowPresentationPreferences;
 }
 
 /** 渲染进程可修改的应用设置。 */
@@ -338,7 +346,7 @@ export type WindowAction =
   | "open-devtools";
 
 /** 渲染进程可访问的受限桌面接口。 */
-export interface AdbStudioApi {
+export interface AdbStudioApi extends ConnectionApi {
   /** 获取当前设备快照。 */
   getDevices(): Promise<DeviceInfo[]>;
   /** 立即刷新并返回设备列表。 */

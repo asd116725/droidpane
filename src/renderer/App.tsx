@@ -13,6 +13,10 @@ import {
   IconAlertCircle,
   IconAlertTriangle,
   IconArrowsMaximize,
+  IconArrowsMinimize,
+  IconPin,
+  IconPinned,
+  IconWifi,
   IconCheck,
   IconChevronDown,
   IconCircleCheck,
@@ -75,6 +79,9 @@ import {
 } from "./use-live-preview";
 import { VideoLibraryDrawer } from "./video-library/VideoLibraryDrawer";
 import { MirrorCanvas, MirrorControlPanel } from "./MirrorControls";
+import { ConnectionCenter } from "./connection/ConnectionCenter";
+import { CompactControls } from "./connection/CompactControls";
+import type { MirrorRecoveryState, WindowPresentationState, WirelessState } from "../shared/connection";
 import "./app.css";
 
 /** 应用组件属性。 */
@@ -159,6 +166,8 @@ const studioAntTheme: ThemeConfig = {
   algorithm: antdTheme.darkAlgorithm,
   token: {
     colorPrimary: "#28d7f3",
+    colorLink: "#5bd7ef",
+    colorLinkHover: "#a1efff",
     colorBgContainer: "transparent",
     colorBgElevated: "#1b2024",
     colorBorder: "#3b444c",
@@ -192,20 +201,31 @@ const playbackRates = [1, 1.25, 1.5, 2];
 
 /** 标题栏组件属性。 */
 interface TitleBarProps {
+  presentation: WindowPresentationState;
+  deviceName?: string;
+  onToggleMode(): void;
+  onTogglePin(): void;
   /** 窗口控制回调。 */
   onWindowAction(action: WindowAction): void;
 }
 
 /** 自定义跨平台标题栏。 */
-function TitleBar({ onWindowAction }: TitleBarProps): ReactNode {
+function TitleBar({ onWindowAction, presentation, deviceName, onToggleMode, onTogglePin }: TitleBarProps): ReactNode {
   return (
     <header className="title-bar">
       <div className="title-bar__name">
         <img className="title-bar__icon" src={applicationIcon} alt="" />
         <span>{applicationName}</span>
-        <span className="title-bar__subtitle">安卓镜像调试工具</span>
+        <span className="title-bar__subtitle">{presentation.mode === "compact" ? deviceName || "未连接" : "安卓镜像调试工具"}</span>
       </div>
       <div className="title-bar__controls">
+        <button type="button" className={presentation.alwaysOnTop ? "is-pinned" : undefined}
+          aria-label={presentation.alwaysOnTop ? "取消窗口置顶" : "窗口置顶"} aria-pressed={presentation.alwaysOnTop} onClick={onTogglePin}>
+          {presentation.alwaysOnTop ? <IconPinned size={18} /> : <IconPin size={18} />}
+        </button>
+        <button type="button" aria-label={presentation.mode === "compact" ? "恢复完整窗口" : "进入紧凑窗口"} onClick={onToggleMode}>
+          {presentation.mode === "compact" ? <IconArrowsMaximize size={18} /> : <IconArrowsMinimize size={18} />}
+        </button>
         <button
           type="button"
           aria-label="最小化窗口"
@@ -588,6 +608,12 @@ function DeviceToolbar({
 
 /** 镜像录制舞台属性。 */
 interface DeviceStageProps {
+  recovery: MirrorRecoveryState;
+  recordingInterrupted: boolean;
+  compact: boolean;
+  onRetryRecovery(): void;
+  onCancelRecovery(): void;
+  onOpenConnection(): void;
   /** 安全桌面接口。 */
   api: Pick<AdbStudioApi, "sendDeviceControl">;
   /** 当前设备。 */
@@ -662,6 +688,7 @@ function isSameArtifact(
 
 /** 中央镜像与录制舞台。 */
 function DeviceStage({
+  recovery, recordingInterrupted, compact, onRetryRecovery, onCancelRecovery, onOpenConnection,
   api,
   device,
   state,
@@ -677,11 +704,10 @@ function DeviceStage({
   onAudioMonitorVolume
 }: DeviceStageProps): ReactNode {
   /** 当前镜像是否仍占据实时舞台。 */
-  const mirrorVisible = ["starting", "mirroring", "stopping"].includes(
-    mirrorState.status
-  );
+  const recovering = ["waiting", "connecting", "starting", "failed"].includes(recovery.status);
+  const mirrorVisible = recovering || ["starting", "mirroring", "stopping"].includes(mirrorState.status);
   /** 当前是否可以直接控制设备。 */
-  const mirrorControllable = mirrorState.status === "mirroring" && active;
+  const mirrorControllable = mirrorState.status === "mirroring" && active && !recovering;
   /** 当前下拉菜单是否由控制按钮打开。 */
   const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
   /** 交替打开或关闭设备下拉菜单。 */
@@ -706,11 +732,9 @@ function DeviceStage({
 
   return (
     <main className="stage" ref={stageRef}>
-      {mirrorVisible ||
-        state.status === "recording" ||
-        state.status === "starting" ? (
-        <div
-          className={`live-preview live-preview--${preview.status}`}
+      <div
+          className={`live-preview live-preview--${preview.status}${recovering ? " is-recovering" : ""}`}
+          hidden={!mirrorVisible && state.status !== "recording" && state.status !== "starting"}
         >
           <MirrorCanvas
             api={api}
@@ -719,7 +743,7 @@ function DeviceStage({
             onFullscreen={onFullscreen}
             onToggleNotificationPanel={toggleNotificationPanel}
           />
-          {preview.status !== "live" && (
+          {!recovering && preview.status !== "live" && (
             <div
               className="live-preview__placeholder"
               role={preview.status === "unavailable" ? "alert" : undefined}
@@ -752,7 +776,7 @@ function DeviceStage({
               )}
             </div>
           )}
-          {["starting", "recording", "stopping"].includes(state.status) ? (
+          {!recovering && (["starting", "recording", "stopping"].includes(state.status) ? (
             <div className="live-preview__recording-badge">
               <span className="recording-pulse" />
               <span className="live-preview__rec">
@@ -792,14 +816,14 @@ function DeviceStage({
                 </span>
               )}
             </div>
-          )}
-          {(mirrorState.audioFallbackReason || state.audioFallbackReason) && (
+          ))}
+          {(mirrorState.audioFallbackReason || state.audioFallbackReason) && !recovering && (
             <div className="live-preview__notice">
               <IconAlertTriangle size={18} stroke={1.7} />
               {mirrorState.audioFallbackReason || state.audioFallbackReason}
             </div>
           )}
-          {mirrorControllable && (
+          {mirrorControllable && !compact && (
             <MirrorControlPanel
               api={api}
               onFullscreen={onFullscreen}
@@ -867,8 +891,19 @@ function DeviceStage({
               </button>
             )}
           </div>
+          {recovering && <div className="recovery-overlay" role="status" aria-label="设备连接恢复">
+            {recovery.status === "failed" ? <IconAlertTriangle size={35} /> : <IconLoader2 className="is-spinning" size={35} />}
+            <strong>{recovery.status === "failed" ? "暂时无法连接" : "连接已中断，正在重新连接"}</strong>
+            <p>{recovery.message || "画面已暂停，恢复后继续操作"}</p>
+            <div className="recovery-overlay__actions"><button type="button" className="connection-primary" onClick={onRetryRecovery}>立即重试</button>
+              <button type="button" onClick={onCancelRecovery}>停止重连</button></div>
+            {recovery.status === "failed" && <button type="button" className="text-button" onClick={onOpenConnection}>打开连接中心</button>}
+            {recordingInterrupted && state.status === "stopping" && <p className="recovery-recording-note">录制已中断，正在保存已录内容</p>}
+            {recordingInterrupted && state.status === "ready" && state.artifactId && <p className="recovery-recording-note">已保存录制片段；再次录制将生成新文件</p>}
+            {recordingInterrupted && state.status === "error" && <p className="recovery-recording-note is-error">录制保存失败：{state.errorMessage || "请检查录制目录"}</p>}
+          </div>}
         </div>
-      ) : state.status === "stopping" ? (
+      {!mirrorVisible && state.status !== "recording" && state.status !== "starting" && (state.status === "stopping" ? (
         <div className="stage-state">
           <IconLoader2 className="is-spinning" size={42} stroke={1.5} />
           <div className="stage-state__title">正在完成 MP4 封装</div>
@@ -904,15 +939,17 @@ function DeviceStage({
         <div className="stage-state">
           <IconDeviceMobileOff size={47} stroke={1.35} />
           <div className="stage-state__title">
-            {device ? "准备开始设备录屏" : "连接 Android 设备开始录制"}
+            {device ? "准备开启手机投屏" : "连接你的手机"}
           </div>
           <p>
             {device
-              ? "选择画质与音频设置，然后点击开始录制"
-              : "请开启 USB 调试，并使用数据线或无线 ADB 连接"}
+              ? "开启镜像后即可操作手机，需要时再开始录制"
+              : "手机与电脑连接同一 Wi-Fi，或通过 USB 连接"}
           </p>
+          <button type="button" className="connection-primary empty-connect" onClick={onOpenConnection}><IconWifi size={18} />连接手机</button>
+          <span className="stage-state__help">USB 连接需开启调试，并在手机上确认授权</span>
         </div>
-      )}
+      ))}
     </main>
   );
 }
@@ -1452,6 +1489,14 @@ export function App({ api }: AppProps): ReactNode {
   );
   /** 当前独立镜像控制状态。 */
   const [mirrorState, setMirrorState] = useState(initialMirrorState);
+  const [wirelessState, setWirelessState] = useState<WirelessState>({ status: "idle", discoveries: [], profiles: [], paired: false, operationId: 0 });
+  const [recovery, setRecovery] = useState<MirrorRecoveryState>({ status: "idle", attempt: 0 });
+  const [recordingInterrupted, setRecordingInterrupted] = useState(false);
+  const recordingStatusRef = useRef(recordingState.status);
+  recordingStatusRef.current = recordingState.status;
+  const [presentation, setPresentation] = useState<WindowPresentationState>({ mode: "normal", alwaysOnTop: false, connectionPanelOpen: false });
+  const compact = presentation.mode === "compact";
+  const recovering = ["waiting", "connecting", "starting", "failed"].includes(recovery.status);
   /** 当前工作区页签。 */
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("device");
   /** 中央舞台当前播放的录制产物。 */
@@ -1501,7 +1546,7 @@ export function App({ api }: AppProps): ReactNode {
     mirrorState.status
   );
   /** 当前设备与参数是否被媒体会话锁定。 */
-  const sessionLocked = recordingLocked || mirrorLocked;
+  const sessionLocked = recordingLocked || mirrorLocked || recovering;
   /** 当前是否有可监听的镜像媒体会话。 */
   const mirrorActive = ["starting", "mirroring"].includes(
     mirrorState.status
@@ -1523,7 +1568,7 @@ export function App({ api }: AppProps): ReactNode {
   /** 当前设备是否允许建立镜像。 */
   const canMirror = selectedDevice?.status === "available";
   /** 当前是否允许开始录制。 */
-  const canRecord = Boolean(canMirror && mirrorState.status === "mirroring");
+  const canRecord = Boolean(canMirror && mirrorState.status === "mirroring" && !recovering);
   /** 当前不可录制时的显式操作提示。 */
   const recordingPrerequisiteMessage = canRecord
     ? undefined
@@ -1607,6 +1652,25 @@ export function App({ api }: AppProps): ReactNode {
   useEffect(() => {
     playbackArtifactRef.current = playbackArtifact;
   }, [playbackArtifact]);
+
+  useEffect(() => {
+    let disposed = false;
+    let wirelessChanged = false;
+    let recoveryChanged = false;
+    let windowChanged = false;
+    const offWireless = desktopApi.onWirelessStateChanged(state => { wirelessChanged = true; setWirelessState(state); });
+    const offRecovery = desktopApi.onMirrorRecoveryStateChanged(state => {
+      recoveryChanged = true;
+      if (["waiting", "connecting", "starting", "failed"].includes(state.status) && ["starting", "recording", "stopping"].includes(recordingStatusRef.current)) setRecordingInterrupted(true);
+      if (state.status === "idle" || state.status === "canceled") setRecordingInterrupted(false);
+      setRecovery(state);
+    });
+    const offWindow = desktopApi.onWindowPresentationChanged(state => { windowChanged = true; setPresentation(state); });
+    void desktopApi.getWirelessState().then(state => { if (!disposed && !wirelessChanged) setWirelessState(state); }).catch(() => undefined);
+    void desktopApi.getMirrorRecoveryState().then(state => { if (!disposed && !recoveryChanged) setRecovery(state); }).catch(() => undefined);
+    void desktopApi.getWindowPresentation().then(state => { if (!disposed && !windowChanged) setPresentation(state); }).catch(() => undefined);
+    return () => { disposed = true; offWireless(); offRecovery(); offWindow(); };
+  }, [desktopApi]);
 
   useEffect(() => {
     /** 是否已卸载。 */
@@ -1712,6 +1776,11 @@ export function App({ api }: AppProps): ReactNode {
     setCurrentTime(0);
     setPlaying(false);
   }, [playbackArtifact]);
+
+  /** 重启镜像前解除 Worker 的错误暂停，并让媒体端重新发送关键帧。 */
+  useEffect(() => {
+    if (recovery.status === "starting") retryLivePreview();
+  }, [recovery.status, retryLivePreview]);
 
   useEffect(() => {
     if (!showAudioMonitor && livePreview.audioMonitoring) {
@@ -2136,12 +2205,48 @@ export function App({ api }: AppProps): ReactNode {
     void stage?.requestFullscreen().catch(showError);
   }, [showError]);
 
+  /** 窗口状态由主进程回显，切换布局不更换镜像画布。 */
+  const changeWindow = (operation: Promise<WindowPresentationState>) => {
+    void operation.then(setPresentation).catch(reason => setToast(reason instanceof Error ? reason.message : "窗口操作失败"));
+  };
+  const openConnection = () => changeWindow(desktopApi.setConnectionPanelOpen(true));
+  const restoreWindow = () => changeWindow(desktopApi.setWindowMode("normal"));
+  const connectedDevice = devices.find(device => device.serial === mirrorState.deviceSerial) || selectedDevice;
+  const connectionLabel = recovering ? "连接已中断" : mirrorState.status === "starting" ? "正在开启投屏" : mirrorState.status === "mirroring" ? livePreview.status === "live" ? "投屏中" : "已连接 · 等待画面" : connectedDevice?.status === "available" ? "设备就绪" : "连接手机";
+  /** 无线接入成功后复用现有镜像流程，不修改正在收尾的录制状态。 */
+  const startConnectedMirror = async (serial: string, isCurrent: () => boolean) => {
+    if (recordingLocked) throw new Error("请先停止录制，再切换设备");
+    await desktopApi.cancelMirrorRecovery();
+    if (!isCurrent()) return;
+    if (mirrorLocked) await desktopApi.stopMirroring();
+    if (!isCurrent()) return;
+    setSelectedSerial(serial);
+    setActiveTab("device");
+    const snapshot = await desktopApi.refreshDevices();
+    if (!isCurrent()) return;
+    setDevices(snapshot);
+    retryLivePreview();
+    const device = snapshot.find(item => item.serial === serial);
+    if (device) await prepareAudioMonitoring(device);
+    if (!isCurrent()) return;
+    const state = await desktopApi.startMirroring(serial, settings.preset);
+    if (isCurrent()) setMirrorState(state);
+  };
+
   return (
-    <div className="app-shell">
-      <ConfigProvider theme={studioAntTheme}>
-        {notificationContextHolder}
-      </ConfigProvider>
-      <TitleBar onWindowAction={handleWindowAction} />
+    <ConfigProvider theme={studioAntTheme}>
+    <div className={`app-shell${compact ? " app-shell--compact" : ""}${presentation.connectionPanelOpen ? " app-shell--connection-open" : ""}`}>
+      <div className="phone-workspace">
+      {notificationContextHolder}
+      <TitleBar onWindowAction={handleWindowAction} presentation={presentation} deviceName={connectedDevice?.model}
+        onToggleMode={() => { setActiveTab("device"); changeWindow(desktopApi.setWindowMode(compact ? "normal" : "compact")); }}
+        onTogglePin={() => changeWindow(desktopApi.setWindowAlwaysOnTop(!presentation.alwaysOnTop))} />
+      <button type="button" className={`connection-strip${recovering ? " is-recovering" : ""}`} aria-label="管理设备连接" aria-expanded={presentation.connectionPanelOpen} onClick={openConnection}>
+        <span className={`status-dot status-dot--${mirrorState.status === "mirroring" && !recovering ? "available" : "offline"}`} />
+        <strong>{connectionLabel}</strong><span className="connection-strip__transport">{connectedDevice?.connectionType === "network" ? "无线" : connectedDevice?.connectionType === "emulator" ? "模拟器" : connectedDevice ? "USB" : "USB / 无线"}</span>
+        <span className="connection-strip__serial">{compact ? connectedDevice?.serial || "添加或选择设备" : "管理连接"}</span><IconChevronDown size={17} />
+      </button>
+      {!api && !window.adbStudio && <div className="demo-notice">浏览器交互演示 · 不连接真实手机，不模拟实时画面</div>}
       <DeviceToolbar
         devices={devices}
         selectedSerial={selectedSerial}
@@ -2173,7 +2278,13 @@ export function App({ api }: AppProps): ReactNode {
           <div className="studio-workspace__content">
             <DeviceStage
               api={desktopApi}
-              device={selectedDevice}
+              recovery={recovery}
+              recordingInterrupted={recordingInterrupted}
+              compact={compact}
+              onRetryRecovery={() => void desktopApi.retryMirrorRecovery().then(setRecovery)}
+              onCancelRecovery={() => void desktopApi.cancelMirrorRecovery().then(setRecovery)}
+              onOpenConnection={openConnection}
+              device={connectedDevice}
               state={recordingState}
               mirrorState={mirrorState}
               stageRef={deviceStageRef}
@@ -2189,7 +2300,7 @@ export function App({ api }: AppProps): ReactNode {
               onAudioMonitorVolume={handleAudioMonitorVolume}
             />
           </div>
-          {activeTab === "device" && (
+          {activeTab === "device" && !compact && (
             <RecordingDock
               preset={settings.preset}
               state={recordingState}
@@ -2201,6 +2312,10 @@ export function App({ api }: AppProps): ReactNode {
               onStop={() => void handleStop()}
             />
           )}
+          {compact && <CompactControls api={desktopApi} interactive={mirrorState.status === "mirroring" && !recovering}
+            canRecord={canRecord} recording={recordingState} onRecord={() => void handleStart()} onStopRecording={() => void handleStop()}
+            onStopMirror={() => void handleStopMirroring()} onRestore={restoreWindow}
+            onLibrary={() => { restoreWindow(); handleTabChange("library"); }} />}
         </section>
         <section
           id="workspace-panel-library"
@@ -2255,6 +2370,9 @@ export function App({ api }: AppProps): ReactNode {
           </div>
         </section>
       </section>
+      </div>
+      {presentation.connectionPanelOpen && <ConnectionCenter api={desktopApi} state={wirelessState} devices={devices} locked={recordingLocked}
+        onState={setWirelessState} onConnected={startConnectedMirror} onClose={() => changeWindow(desktopApi.setConnectionPanelOpen(false))} />}
       {toast && (
         <div className="global-toast" role="status">
           <IconCircleCheck size={19} stroke={1.9} />
@@ -2262,5 +2380,6 @@ export function App({ api }: AppProps): ReactNode {
         </div>
       )}
     </div>
+    </ConfigProvider>
   );
 }

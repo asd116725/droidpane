@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../../src/renderer/App";
+import * as livePreviewModule from "../../src/renderer/use-live-preview";
 import { groupRecordingLibraryItems } from "../../src/renderer/video-library/VideoLibraryDrawer";
 import type {
   AdbStudioApi,
@@ -98,7 +99,27 @@ function createApi(
         status: "idle",
         audioFallback: false
       };
+  const wireless = { status: "idle", discoveries: [], profiles: [], paired: false, operationId: 0 };
+  const windowState = { mode: "normal", alwaysOnTop: false, connectionPanelOpen: false };
   return {
+    getWirelessState: jest.fn().mockResolvedValue(wireless),
+    onWirelessStateChanged: jest.fn().mockReturnValue(() => undefined),
+    discoverWirelessDevices: jest.fn().mockResolvedValue(wireless),
+    pairWirelessDevice: jest.fn().mockResolvedValue(wireless),
+    connectWirelessDevice: jest.fn().mockResolvedValue(wireless),
+    cancelWirelessOperation: jest.fn().mockResolvedValue(wireless),
+    disconnectWirelessDevice: jest.fn().mockResolvedValue(wireless),
+    renameWirelessProfile: jest.fn().mockResolvedValue(wireless),
+    removeWirelessProfile: jest.fn().mockResolvedValue(wireless),
+    getMirrorRecoveryState: jest.fn().mockResolvedValue({ status: "idle", attempt: 0 }),
+    onMirrorRecoveryStateChanged: jest.fn().mockReturnValue(() => undefined),
+    retryMirrorRecovery: jest.fn().mockResolvedValue({ status: "waiting", attempt: 1 }),
+    cancelMirrorRecovery: jest.fn().mockResolvedValue({ status: "idle", attempt: 0 }),
+    getWindowPresentation: jest.fn().mockResolvedValue(windowState),
+    onWindowPresentationChanged: jest.fn().mockReturnValue(() => undefined),
+    setWindowMode: jest.fn().mockImplementation(async mode => ({ ...Object.assign(windowState, { mode }) })),
+    setWindowAlwaysOnTop: jest.fn().mockImplementation(async alwaysOnTop => ({ ...Object.assign(windowState, { alwaysOnTop }) })),
+    setConnectionPanelOpen: jest.fn().mockImplementation(async connectionPanelOpen => ({ ...Object.assign(windowState, { connectionPanelOpen }) })),
     getDevices: jest.fn().mockResolvedValue(devices),
     refreshDevices: jest.fn().mockResolvedValue(devices),
     onDevicesChanged: jest.fn().mockReturnValue(() => undefined),
@@ -475,7 +496,7 @@ describe("DroidPane界面", () => {
     render(<App api={api} />);
 
     expect(
-      await screen.findByText("连接 Android 设备开始录制")
+      await screen.findByText("连接你的手机")
     ).toBeInTheDocument();
     /** 空闲态开始按钮。 */
     const startButton = screen.getByRole("button", { name: "开始录制" });
@@ -1522,4 +1543,69 @@ describe("DroidPane界面", () => {
     expect(screen.getByRole("button", { name: "导出 MP4" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "播放" })).toBeDisabled();
   });
+});
+
+
+describe("紧凑窗口与镜像恢复", () => {
+  it("切换窗口和置顶保留同一画布及录制会话", async () => {
+    const api = createApi([availableDevice], { status: "recording", elapsedMs: 12000, audioFallback: false, deviceSerial: availableDevice.serial });
+    const user = userEvent.setup();
+    render(<App api={api} />);
+    await screen.findByText("镜像控制中");
+    const canvas = screen.getByLabelText("安卓设备实时预览");
+    await user.click(screen.getByRole("button", { name: "进入紧凑窗口" }));
+    expect(document.querySelector(".app-shell")).toHaveClass("app-shell--compact");
+    expect(screen.getByLabelText("安卓设备实时预览")).toBe(canvas);
+    expect(within(screen.getByRole("contentinfo", { name: "紧凑窗口设备控制" })).getByRole("button", { name: "停止录制" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "窗口置顶" }));
+    expect(await screen.findByRole("button", { name: "取消窗口置顶" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "恢复完整窗口" }));
+    expect(screen.getByLabelText("安卓设备实时预览")).toBe(canvas);
+    expect(api.startMirroring).not.toHaveBeenCalled();
+    expect(api.stopMirroring).not.toHaveBeenCalled();
+    expect(api.startRecording).not.toHaveBeenCalled();
+    expect(api.stopRecording).not.toHaveBeenCalled();
+  });
+
+  it("断线期间保留画布并禁用输入，真实封装结果更新保存提示", async () => {
+    const api = createApi([availableDevice], { status: "recording", elapsedMs: 12000, audioFallback: false, deviceSerial: availableDevice.serial });
+    render(<App api={api} />);
+    await screen.findByText("镜像控制中");
+    const canvas = screen.getByLabelText("安卓设备实时预览");
+    act(() => {
+      api.onMirrorRecoveryStateChanged.mock.calls[0][0]({ status: "waiting", attempt: 1, deviceSerial: availableDevice.serial });
+      api.onMirrorStateChanged.mock.calls[0][0]({ status: "error", audioFallback: false });
+      api.onRecordingStateChanged.mock.calls[0][0]({ status: "stopping", elapsedMs: 12000, audioFallback: false });
+    });
+    expect(screen.getByLabelText("安卓设备实时预览")).toBe(canvas);
+    expect(screen.getByRole("textbox", { name: "镜像控制输入" })).toBeDisabled();
+    expect(screen.getByText("录制已中断，正在保存已录内容")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "恢复预览" })).not.toBeInTheDocument();
+    act(() => api.onRecordingStateChanged.mock.calls[0][0]({ status: "error", elapsedMs: 12000, audioFallback: false, errorMessage: "磁盘空间不足" }));
+    expect(screen.getByText("录制保存失败：磁盘空间不足")).toBeInTheDocument();
+    expect(screen.queryByText("已保存录制片段；再次录制将生成新文件")).not.toBeInTheDocument();
+  });
+});
+
+
+test("恢复进入镜像启动阶段时只重置一次预览错误状态，不重挂载画布", async () => {
+  const retry = jest.fn();
+  const preview = jest.spyOn(livePreviewModule, "useLivePreview").mockReturnValue({
+    status: "unavailable", canvasGeneration: 0, canvasRef: jest.fn(), retry,
+    audioMonitoring: false, audioMonitorStatus: "off", setAudioMonitoring: jest.fn().mockResolvedValue(undefined), setAudioMonitorVolume: jest.fn()
+  });
+  try {
+    const api = createApi([availableDevice], { status: "idle", elapsedMs: 0, audioFallback: false });
+    const { unmount } = render(<App api={api} />);
+    await screen.findByText(availableDevice.serial);
+    const canvas = screen.getByLabelText("安卓设备实时预览");
+    act(() => api.onMirrorRecoveryStateChanged.mock.calls[0][0]({ status: "waiting", attempt: 1 }));
+    expect(retry).not.toHaveBeenCalled();
+    act(() => api.onMirrorRecoveryStateChanged.mock.calls[0][0]({ status: "starting", attempt: 1 }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    act(() => api.onMirrorRecoveryStateChanged.mock.calls[0][0]({ status: "starting", attempt: 1, message: "等待画面" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("安卓设备实时预览")).toBe(canvas);
+    unmount();
+  } finally { preview.mockRestore(); }
 });

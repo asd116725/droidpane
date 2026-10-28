@@ -12,6 +12,15 @@ import {
 import { ipcChannels } from "../shared/ipc";
 import { applicationName } from "../shared/brand";
 import {
+  parseBooleanSetting,
+  parseConnectWirelessInput,
+  parsePairWirelessInput,
+  parseProfileId,
+  parseProfileRename,
+  parseWindowMode,
+  parseWirelessSerial
+} from "../shared/connection-validation";
+import {
   parseArtifactId,
   parseArtifactIds,
   parseDeviceControlCommand,
@@ -26,6 +35,9 @@ import type { RecordingLibraryService } from "./recording/library";
 import type { SettingsService } from "./settings/service";
 import type { LivePreviewHub } from "./preview/hub";
 import type { MirroringService } from "./mirroring/service";
+import type { WirelessService } from "./adb/wireless-service";
+import type { MirrorRecoveryService } from "./mirroring/recovery-service";
+import type { WindowController } from "./window-controller";
 
 /** IPC 处理器所需主进程服务。 */
 export interface IpcServices {
@@ -41,6 +53,12 @@ export interface IpcServices {
   settings: SettingsService;
   /** 实时预览消息分发器。 */
   preview: LivePreviewHub;
+  /** 无线接入与最近设备。 */
+  wireless: WirelessService;
+  /** 显式镜像意图与异常恢复。 */
+  recovery: MirrorRecoveryService;
+  /** 同一窗口的布局与置顶。 */
+  windowPresentation: WindowController;
 }
 
 /** 创建并确认目录可写。 */
@@ -77,6 +95,9 @@ export function registerIpcHandlers(
 ): () => void {
   /** 是否正在等待系统完成回收站操作。 */
   let deletingRecordings = false;
+  const invokeChannels: string[] = [];
+  /** 覆盖等待旧镜像停止期间的取消，避免稍后才开始过期配对。 */
+  let wirelessRequestId = 0;
   /** 注册并统一校验发送方。 */
   const handle = (
     channel: string,
@@ -86,7 +107,54 @@ export function registerIpcHandlers(
       assertTrustedSender(event, window);
       return listener(event, value);
     });
+    invokeChannels.push(channel);
   };
+
+  /** 切换到新无线设备前，先完成当前镜像的显式停止。 */
+  const prepareWirelessConnection = async (): Promise<boolean> => {
+    if (services.recording.isBusy()) throw new Error("请先停止录制，再连接其他设备");
+    const requestId = ++wirelessRequestId;
+    services.wireless.cancel();
+    await services.recovery.stop();
+    return requestId === wirelessRequestId;
+  };
+
+  handle(ipcChannels.getWirelessState, () => services.wireless.getState());
+  handle(ipcChannels.discoverWirelessDevices, () => services.wireless.discover());
+  handle(ipcChannels.pairWirelessDevice, async (_event, value) => {
+    const input = parsePairWirelessInput(value);
+    if (!await prepareWirelessConnection()) return services.wireless.getState();
+    return services.wireless.pair(input);
+  });
+  handle(ipcChannels.connectWirelessDevice, async (_event, value) => {
+    const input = parseConnectWirelessInput(value);
+    if (!await prepareWirelessConnection()) return services.wireless.getState();
+    return services.wireless.connect(input);
+  });
+  handle(ipcChannels.cancelWirelessOperation, () => {
+    wirelessRequestId += 1;
+    return services.wireless.cancel();
+  });
+  handle(ipcChannels.disconnectWirelessDevice, async (_event, value) => {
+    const serial = parseWirelessSerial(value);
+    if (services.recording.isBusy()) throw new Error("请先停止录制，再断开设备");
+    wirelessRequestId += 1;
+    services.wireless.cancel();
+    if (services.mirroring.getState().deviceSerial === serial) await services.recovery.stop();
+    return services.wireless.disconnect(serial);
+  });
+  handle(ipcChannels.renameWirelessProfile, (_event, value) => {
+    const { id, name } = parseProfileRename(value);
+    return services.wireless.renameProfile(id, name);
+  });
+  handle(ipcChannels.removeWirelessProfile, (_event, value) => services.wireless.removeProfile(parseProfileId(value)));
+  handle(ipcChannels.getMirrorRecoveryState, () => services.recovery.getState());
+  handle(ipcChannels.retryMirrorRecovery, () => services.recovery.retry());
+  handle(ipcChannels.cancelMirrorRecovery, () => services.recovery.cancel());
+  handle(ipcChannels.getWindowPresentation, () => services.windowPresentation.getState());
+  handle(ipcChannels.setWindowMode, (_event, value) => services.windowPresentation.setMode(parseWindowMode(value)));
+  handle(ipcChannels.setWindowAlwaysOnTop, (_event, value) => services.windowPresentation.setAlwaysOnTop(parseBooleanSetting(value)));
+  handle(ipcChannels.setConnectionPanelOpen, (_event, value) => services.windowPresentation.setConnectionPanelOpen(parseBooleanSetting(value)));
 
   handle(ipcChannels.getDevices, () => services.devices.getDevices());
   handle(ipcChannels.refreshDevices, () => services.devices.refresh());
@@ -135,9 +203,15 @@ export function registerIpcHandlers(
       throw new Error("所选设备已断开连接");
     }
 
-    return services.mirroring.start(device, input.preset);
+    wirelessRequestId += 1;
+    services.wireless.cancel();
+    return services.recovery.start(device, input.preset);
   });
-  handle(ipcChannels.stopMirroring, () => services.mirroring.stop());
+  handle(ipcChannels.stopMirroring, () => {
+    wirelessRequestId += 1;
+    services.wireless.cancel();
+    return services.recovery.stop();
+  });
   handle(ipcChannels.exportRecording, async (_event, value) => {
     /** 已校验产物 ID。 */
     const artifactId = parseArtifactId(value);
@@ -292,28 +366,6 @@ export function registerIpcHandlers(
     }
   };
   ipcMain.on(ipcChannels.deviceControl, handleDeviceControl);
-
-  /** 注册过的调用通道。 */
-  const invokeChannels = [
-    ipcChannels.getDevices,
-    ipcChannels.refreshDevices,
-    ipcChannels.getRecordingState,
-    ipcChannels.getMirrorState,
-    ipcChannels.getRecordingArtifact,
-    ipcChannels.getRecordingLibrary,
-    ipcChannels.refreshRecordingLibrary,
-    ipcChannels.deleteRecordings,
-    ipcChannels.startRecording,
-    ipcChannels.stopRecording,
-    ipcChannels.startMirroring,
-    ipcChannels.stopMirroring,
-    ipcChannels.exportRecording,
-    ipcChannels.openRecordingFolder,
-    ipcChannels.getSettings,
-    ipcChannels.setSettings,
-    ipcChannels.chooseRecordingsDirectory,
-    ipcChannels.controlWindow
-  ];
 
   return () => {
     invokeChannels.forEach((channel) => ipcMain.removeHandler(channel));

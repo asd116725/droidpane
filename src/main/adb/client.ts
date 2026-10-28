@@ -1,11 +1,18 @@
 import { execFile } from "node:child_process";
 import type { DeviceInfo } from "../../shared/types";
+import type { WirelessDiscovery, WirelessEndpoint } from "../../shared/connection";
 import {
   findScrcpyServerPid,
   parseScrcpyServerPids
 } from "../recording/process";
 import { formatScrcpyScid } from "../scrcpy/server-options";
-import { parseAdbDeviceList, parseAndroidProperties } from "./parser";
+import {
+  formatWirelessEndpoint,
+  parseAdbDeviceList,
+  parseAdbMdnsServices,
+  parseAndroidIdentity,
+  parseAndroidProperties
+} from "./parser";
 
 /** 可执行文件返回内容。 */
 export interface ExecutableResult {
@@ -19,14 +26,16 @@ export interface ExecutableResult {
 export type ExecutableRunner = (
   file: string,
   arguments_: string[],
-  timeoutMilliseconds?: number
+  timeoutMilliseconds?: number,
+  signal?: AbortSignal
 ) => Promise<ExecutableResult>;
 
 /** 使用参数数组执行受信任的内置二进制。 */
 export function runExecutable(
   file: string,
   arguments_: string[],
-  timeoutMilliseconds = 10_000
+  timeoutMilliseconds = 10_000,
+  signal?: AbortSignal
 ): Promise<ExecutableResult> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -37,6 +46,7 @@ export function runExecutable(
         maxBuffer: 8 * 1_024 * 1_024,
         shell: false,
         timeout: timeoutMilliseconds,
+        signal,
         windowsHide: true
       },
       (error, stdout, stderr) => {
@@ -58,6 +68,61 @@ export class AdbClient {
     private readonly adbPath: string,
     private readonly runner: ExecutableRunner = runExecutable
   ) {}
+
+  /** 发现已广播的无线服务，不主动扫描局域网地址。 */
+  async listMdnsServices(signal?: AbortSignal): Promise<WirelessDiscovery[]> {
+    const { stdout } = await this.runner(
+      this.adbPath, ["mdns", "services"], 5_000, signal
+    );
+    signal?.throwIfAborted();
+    return parseAdbMdnsServices(stdout);
+  }
+
+  /** 配对失败只返回固定说明，避免 ADB 错误回显一次性配对码。 */
+  async pair(endpoint: WirelessEndpoint, code: string, signal?: AbortSignal): Promise<void> {
+    try {
+      signal?.throwIfAborted();
+      const { stdout } = await this.runner(
+        this.adbPath, ["pair", formatWirelessEndpoint(endpoint), code], 20_000, signal
+      );
+      signal?.throwIfAborted();
+      if (!/successfully paired to/i.test(stdout)) {
+        throw new Error("配对未成功");
+      }
+    } catch {
+      signal?.throwIfAborted();
+      throw new Error("配对失败，请重新打开手机上的配对码弹窗，检查地址、端口与配对码");
+    }
+  }
+
+  /** ADB 部分连接失败仍返回零退出码，需要检查结果文字。 */
+  async connect(endpoint: WirelessEndpoint, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const { stdout } = await this.runner(
+      this.adbPath, ["connect", formatWirelessEndpoint(endpoint)], 10_000, signal
+    );
+    signal?.throwIfAborted();
+    if (!/(?:^|\n)(?:already )?connected to /i.test(stdout.trim())) {
+      throw new Error("连接失败，请确认手机与电脑处于同一网络，并使用无线调试主页的连接端口");
+    }
+  }
+
+  /** 只断开指定无线传输，不重启共享的 ADB 服务。 */
+  async disconnect(serial: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    await this.runner(this.adbPath, ["disconnect", serial], 5_000, signal);
+    signal?.throwIfAborted();
+  }
+
+  /** 连接后读取真实设备属性，避免把变化的 IP 当作设备身份。 */
+  async readIdentity(serial: string, signal?: AbortSignal): Promise<string | undefined> {
+    signal?.throwIfAborted();
+    const { stdout } = await this.runner(
+      this.adbPath, ["-s", serial, "shell", "getprop"], 5_000, signal
+    );
+    signal?.throwIfAborted();
+    return parseAndroidIdentity(stdout);
+  }
 
   /** 列出所有设备并补齐可用设备属性。 */
   async listDevices(): Promise<DeviceInfo[]> {
@@ -186,7 +251,7 @@ export class AdbClient {
   /** 读取指定设备的 Android 关键属性。 */
   private async readProperties(
     serial: string
-  ): Promise<Pick<DeviceInfo, "model" | "androidVersion" | "apiLevel">> {
+  ): Promise<Pick<DeviceInfo, "model" | "androidVersion" | "apiLevel" | "identity">> {
     /** getprop 命令结果。 */
     const { stdout } = await this.runner(this.adbPath, [
       "-s",

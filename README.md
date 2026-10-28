@@ -21,6 +21,9 @@ start recording when needed, and keep using the mirror after recording stops.
 | Feature | What you can do |
 | --- | --- |
 | Device selection | Detect USB devices, network devices, and Android emulators already connected through ADB. View their model, Android version, serial number, and connection status. |
+| Wireless connection center | Pair Android 11+ devices with a pairing code, connect previously paired devices, discover nearby services, and manage recent devices. |
+| Connection recovery | Retry an interrupted mirror for up to 30 seconds, with retry and cancel controls. Recording does not restart automatically. |
+| Compact phone window | Switch the same window to a phone layout, optionally keep it on top, and remember separate normal and compact bounds. |
 | Live mirroring | View your Android screen on the desktop, switch to fullscreen, and monitor mirror status and frame rate. |
 | Mouse control | Click, drag, and scroll directly on the mirror; right-click to go back. A side panel provides Back, Home, Power, and notification shade controls. |
 | Keyboard input | Type English and Chinese, paste text, and use common editing keys and shortcuts. |
@@ -76,6 +79,9 @@ These screenshots show DroidPane connected to an Android 13 emulator.
 
 ## Quick start
 
+Download installers from [GitHub Releases](https://github.com/asd116725/droidpane/releases/latest).
+See [the changelog](CHANGELOG.md) for new features and validation limits.
+
 The application UI is currently in Chinese. The steps below include the matching
 button labels.
 
@@ -86,9 +92,21 @@ button labels.
 5. After stopping the recording, open the **Video library (视频库)** or click **View video (查看视频)** in the completion notification.
 6. To share a recording, select it and click **Export MP4 (导出 MP4)**. Click **End mirroring (结束镜像)** when you finish using the device.
 
-Network devices must already be connected through ADB; DroidPane discovers
-existing ADB connections. The packaged application includes the required runtime,
-so you do not need to install scrcpy separately for normal use.
+For Android 11+, click **Connect phone (连接手机)** or the connection status bar.
+Keep the phone and computer on the same Wi-Fi, open Developer options → Wireless
+debugging → Pair device with pairing code, and enter the address, pairing port,
+and six-digit code. If discovery does not find a connection address, enter the
+connection port from the main Wireless debugging screen. **The pairing and
+connection ports are different.** Older Android devices can continue using USB.
+The packaged application includes the required runtime; no separate scrcpy
+installation is needed.
+
+Use the title bar to switch to a compact phone window or toggle always-on-top.
+The connection panel temporarily widens the compact window. During recovery,
+the last frame remains visible with a paused notice and device input is disabled.
+Recovery succeeds only after a new frame arrives. Devices without a verifiable
+identity, expired authorization, or an unreachable network need manual reconnection.
+Interrupted recordings finish separately and report their actual save result.
 
 ## Mirror controls
 

@@ -1,4 +1,5 @@
 import { applicationName } from "../shared/brand";
+import type { ConnectWirelessInput, MirrorRecoveryState, WindowPresentationState, WirelessState } from "../shared/connection";
 import type {
   AdbStudioApi,
   AppSettings,
@@ -108,6 +109,26 @@ function createDemoLibrary(): RecordingLibrarySnapshot {
 
 /** 创建仅开发预览使用的交互式桌面 API。 */
 export function createDemoApi(): AdbStudioApi {
+  const devices = demoDevices.map(device => ({ ...device }));
+  let presentation: WindowPresentationState = { mode: "normal", alwaysOnTop: false, connectionPanelOpen: false };
+  let recovery: MirrorRecoveryState = { status: "idle", attempt: 0 };
+  let wireless: WirelessState = { status: "idle", discoveries: [], profiles: [], paired: false, operationId: 0 };
+  const presentationListeners = new Set<(state: WindowPresentationState) => void>();
+  const wirelessListeners = new Set<(state: WirelessState) => void>();
+  const recoveryListeners = new Set<(state: MirrorRecoveryState) => void>();
+  const emitWireless = () => { wirelessListeners.forEach(listener => listener({ ...wireless })); return { ...wireless }; };
+  const emitPresentation = () => { presentationListeners.forEach(listener => listener({ ...presentation })); return { ...presentation }; };
+  const emitRecovery = () => { recoveryListeners.forEach(listener => listener({ ...recovery })); return { ...recovery }; };
+  const connectWireless = async ({ endpoint, profileId }: ConnectWirelessInput): Promise<WirelessState> => {
+    const serial = `${endpoint.host}:${endpoint.port}`;
+    if (!devices.some(device => device.serial === serial)) devices.push({ ...devices[0], serial, model: "演示 Android 手机", connectionType: "network" });
+    const profile = { id: profileId || serial, name: "演示 Android 手机", model: "演示 Android 手机", lastSerial: serial, endpoint, lastConnectedAt: Date.now() };
+    wireless = { ...wireless, status: "connected", paired: true, deviceSerial: serial, errorMessage: undefined,
+      message: "演示设备已连接", operationId: wireless.operationId + 1,
+      profiles: [profile, ...wireless.profiles.filter(item => item.id !== profile.id)] };
+    deviceListeners.forEach(listener => listener(devices.map(device => ({ ...device }))));
+    return emitWireless();
+  };
   /** 当前演示录制状态。 */
   let recordingState: RecordingState = {
     status: "ready",
@@ -177,10 +198,41 @@ export function createDemoApi(): AdbStudioApi {
   };
 
   return {
-    getDevices: async () => demoDevices.map((device) => ({ ...device })),
+    getWirelessState: async () => ({ ...wireless }),
+    onWirelessStateChanged: listener => { wirelessListeners.add(listener); return () => wirelessListeners.delete(listener); },
+    discoverWirelessDevices: async () => {
+      wireless = { ...wireless, discoveries: [
+        { name: "演示手机 · 配对服务", type: "pairing", endpoint: { host: "192.168.1.24", port: 37123 } },
+        { name: "演示手机 · 连接服务", type: "connection", endpoint: { host: "192.168.1.24", port: 42871 } }
+      ] }; return emitWireless();
+    },
+    pairWirelessDevice: async ({ endpoint }) => {
+      wireless = { ...wireless, status: "paired", paired: true, operationId: wireless.operationId + 1,
+        message: "演示配对成功，请输入连接端口", discoveries: [{ name: "演示手机", type: "connection", endpoint: { host: endpoint.host, port: 42871 } }] };
+      return emitWireless();
+    },
+    connectWirelessDevice: connectWireless,
+    cancelWirelessOperation: async () => { wireless = { ...wireless, status: wireless.paired ? "paired" : "idle", operationId: wireless.operationId + 1 }; return emitWireless(); },
+    disconnectWirelessDevice: async serial => {
+      const index = devices.findIndex(device => device.serial === serial);
+      if (index >= 0) devices.splice(index, 1);
+      wireless = { ...wireless, status: "idle", deviceSerial: undefined }; return emitWireless();
+    },
+    renameWirelessProfile: async (id, name) => { wireless = { ...wireless, profiles: wireless.profiles.map(profile => profile.id === id ? { ...profile, name } : profile) }; return emitWireless(); },
+    removeWirelessProfile: async id => { wireless = { ...wireless, profiles: wireless.profiles.filter(profile => profile.id !== id) }; return emitWireless(); },
+    getMirrorRecoveryState: async () => ({ ...recovery }),
+    onMirrorRecoveryStateChanged: listener => { recoveryListeners.add(listener); return () => recoveryListeners.delete(listener); },
+    retryMirrorRecovery: async () => { recovery = { status: "recovered", attempt: 1 }; return emitRecovery(); },
+    cancelMirrorRecovery: async () => { recovery = { status: "idle", attempt: 0 }; return emitRecovery(); },
+    getWindowPresentation: async () => ({ ...presentation }),
+    onWindowPresentationChanged: listener => { presentationListeners.add(listener); return () => presentationListeners.delete(listener); },
+    setWindowMode: async mode => { presentation = { ...presentation, mode }; return emitPresentation(); },
+    setWindowAlwaysOnTop: async alwaysOnTop => { presentation = { ...presentation, alwaysOnTop }; return emitPresentation(); },
+    setConnectionPanelOpen: async connectionPanelOpen => { presentation = { ...presentation, connectionPanelOpen }; return emitPresentation(); },
+    getDevices: async () => devices.map((device) => ({ ...device })),
     refreshDevices: async () => {
       /** 演示设备快照。 */
-      const snapshot = demoDevices.map((device) => ({ ...device }));
+      const snapshot = devices.map((device) => ({ ...device }));
       deviceListeners.forEach((listener) => listener(snapshot));
       return snapshot;
     },

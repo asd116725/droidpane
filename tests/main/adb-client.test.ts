@@ -1,3 +1,4 @@
+/** @jest-environment node */
 import {
   AdbClient,
   type ExecutableRunner
@@ -142,5 +143,50 @@ describe("ADB 客户端", () => {
         ["-s", "SERIAL", "forward", "--remove", "tcp:38127"]
       ]
     ]);
+  });
+
+  it("将配对、连接和取消信号以独立参数传给执行器", async () => {
+    const runner = jest.fn()
+      .mockResolvedValueOnce({ stdout: "Successfully paired to 192.168.1.20:41000", stderr: "" })
+      .mockResolvedValueOnce({ stdout: "connected to 192.168.1.20:39000", stderr: "" });
+    const client = new AdbClient("/runtime/adb", runner);
+    const signal = new AbortController().signal;
+
+    await client.pair({ host: "192.168.1.20", port: 41000 }, "123456", signal);
+    await client.connect({ host: "192.168.1.20", port: 39000 }, signal);
+
+    expect(runner.mock.calls).toEqual([
+      ["/runtime/adb", ["pair", "192.168.1.20:41000", "123456"], 20_000, signal],
+      ["/runtime/adb", ["connect", "192.168.1.20:39000"], 10_000, signal]
+    ]);
+  });
+
+  it("配对失败不泄漏执行器错误中的配对码", async () => {
+    const client = new AdbClient("/runtime/adb", jest.fn().mockRejectedValue(
+      new Error("Command failed: adb pair 192.168.1.20:41000 123456")
+    ));
+    await expect(client.pair({ host: "192.168.1.20", port: 41000 }, "123456"))
+      .rejects.toThrow("配对失败");
+    await client.pair({ host: "192.168.1.20", port: 41000 }, "123456")
+      .catch((error: Error) => expect(error.message).not.toContain("123456"));
+  });
+
+  it("拒绝零退出码但实际连接失败的 ADB 输出", async () => {
+    const client = new AdbClient("/runtime/adb", jest.fn().mockResolvedValue({
+      stdout: "failed to connect to '192.168.1.20:39000': Connection refused",
+      stderr: ""
+    }));
+    await expect(client.connect({ host: "192.168.1.20", port: 39000 })).rejects.toThrow("连接失败");
+  });
+
+  it("取消后忽略执行器晚到的连接成功", async () => {
+    const controller = new AbortController();
+    const runner: ExecutableRunner = async () => {
+      controller.abort();
+      return { stdout: "connected to 192.168.1.20:39000", stderr: "" };
+    };
+    await expect(new AdbClient("/runtime/adb", runner).connect(
+      { host: "192.168.1.20", port: 39000 }, controller.signal
+    )).rejects.toThrow();
   });
 });

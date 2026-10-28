@@ -74,6 +74,8 @@ let context: OffscreenCanvasRenderingContext2D | null = null;
 let mediaPort: MessagePort | undefined;
 /** 当前视频尺寸。 */
 let videoSize: { width: number; height: number } | undefined;
+/** 已实际绘制的尺寸，重连时保留旧画面的比例直到新帧接替。 */
+let renderedSize: { width: number; height: number } | undefined;
 /** H.264 Codec String。 */
 let codec: string | undefined;
 /** 最新 H.264 SPS/PPS。 */
@@ -288,13 +290,20 @@ function drawLatestFrame(): void {
   const frame = pendingFrame;
   pendingFrame = undefined;
 
-  if (!frame || !canvas || !context) {
+  if (!frame || !canvas || !context || !videoSize) {
     frame?.close();
     return;
   }
 
+  /** 赋值画布尺寸会清空像素，只在新帧已就绪且尺寸变化时更新。 */
+  if (canvas.width !== videoSize.width) canvas.width = videoSize.width;
+  if (canvas.height !== videoSize.height) canvas.height = videoSize.height;
   context.drawImage(frame, 0, 0, canvas.width, canvas.height);
   frame.close();
+  if (renderedSize?.width !== videoSize.width || renderedSize?.height !== videoSize.height) {
+    renderedSize = { ...videoSize };
+    workerScope.postMessage({ type: "size", ...renderedSize });
+  }
   if (backlogStartedAt !== undefined && !backlogRecoveryTimer) {
     backlogRecoveryTimer = setTimeout(() => {
       backlogRecoveryTimer = undefined;
@@ -449,15 +458,6 @@ function handleStreamMessage(message: PreviewStreamMessage): void {
       videoSize?.width !== message.width ||
       videoSize?.height !== message.height;
     videoSize = { width: message.width, height: message.height };
-    workerScope.postMessage({
-      type: "size",
-      width: message.width,
-      height: message.height
-    });
-    if (canvas) {
-      canvas.width = message.width;
-      canvas.height = message.height;
-    }
     if (changed) {
       resetDecoder();
       resetBacklogTracking();
@@ -600,10 +600,6 @@ workerScope.onmessage = (event): void => {
       sendControl({ type: "visibility", visible: false });
       postStatus("unavailable", "无法创建实时预览绘图环境");
       return;
-    }
-    if (videoSize) {
-      canvas.width = videoSize.width;
-      canvas.height = videoSize.height;
     }
     retryPreview();
     return;

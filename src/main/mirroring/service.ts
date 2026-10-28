@@ -192,6 +192,11 @@ export class MirroringService {
     return this.startSession(device, preset);
   }
 
+  /** 中止尚未完成的启动；恢复层随后在串行队列内等待资源清理。 */
+  cancelPendingStart(): void {
+    this.startupAbortController?.abort(new Error("用户已取消镜像启动"));
+  }
+
   /** 获取当前可录制的镜像上下文，镜像未就绪时拒绝录制。 */
   requireRecordingContext(): MirrorRecordingContext {
     if (!this.active || this.state.status !== "mirroring") {

@@ -34,11 +34,22 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - name: 校验应用签名
         run: codesign --verify --deep --strict --verbose=2 "out/DroidPane-darwin-${{ matrix.arch }}/DroidPane.app"
+      - name: 校验应用版本与架构
+        run: |
+          expected_version=$(node -p "require('./package.json').version")
+          app_path="out/DroidPane-darwin-${{ matrix.arch }}/DroidPane.app"
+          actual_version=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app_path/Contents/Info.plist")
+          test "$actual_version" = "$expected_version"
+          expected_arch="${{ matrix.arch }}"
+          if [ "$expected_arch" = "x64" ]; then expected_arch="x86_64"; fi
+          lipo -verify_arch "$expected_arch" "$app_path/Contents/MacOS/DroidPane"
+          test -d "$app_path/Contents/Resources/licenses"
       - name: 上传 DMG
         uses: actions/upload-artifact@v4
         with:
           name: DroidPane-macOS-${{ matrix.arch }}
           path: out/make/**/*.dmg
+          if-no-files-found: error
 
   windows:
     name: Windows x64 MSI
@@ -61,8 +72,23 @@ jobs:
         run: npm test -- --no-watchman
       - name: 构建未签名 MSI
         run: npm run make -- --arch=x64
+      - name: 校验 MSI 版本与应用架构
+        shell: pwsh
+        run: |
+          $expectedVersion = node -p "require('./package.json').version"
+          $msiFiles = @(Get-ChildItem out/make -Recurse -Filter *.msi)
+          if ($msiFiles.Count -ne 1) { throw 'Expected exactly one MSI' }
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $database = $installer.OpenDatabase($msiFiles[0].FullName, 0)
+          $view = $database.OpenView("SELECT ``Value`` FROM ``Property`` WHERE ``Property`` = 'ProductVersion'")
+          $view.Execute()
+          $actualVersion = $view.Fetch().StringData(1)
+          $view.Close()
+          if ($actualVersion -ne $expectedVersion) { throw "MSI version mismatch: $actualVersion" }
+          node -e "const fs=require('fs');const b=fs.readFileSync('out/DroidPane-win32-x64/DroidPane.exe');if(b.readUInt16LE(b.readUInt32LE(60)+4)!==0x8664)throw Error('Expected x64 PE');"
       - name: 上传安装程序
         uses: actions/upload-artifact@v4
         with:
           name: DroidPane-Windows-x64
           path: out/make/**/*.msi
+          if-no-files-found: error

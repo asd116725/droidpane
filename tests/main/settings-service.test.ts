@@ -154,4 +154,29 @@ describe("设置持久化服务", () => {
       }
     });
   });
+
+  it("并发更新窗口与设备档案时保留原录制偏好和目录", async () => {
+    const service = new SettingsService(settingsPath, defaultRecordingsDirectory);
+    await service.load();
+    const profile = {
+      id: "phone", name: "我的手机", model: "Pixel 8", identity: "serial:phone",
+      lastSerial: "192.168.1.24:42871",
+      endpoint: { host: "192.168.1.24", port: 42871 }, lastConnectedAt: 1
+    };
+    const windowPresentation = { mode: "compact" as const, compactAlwaysOnTop: true };
+    const recordingsDirectory = path.join(temporaryDirectory, "Selected");
+    await Promise.all([
+      service.setWirelessProfiles([profile]),
+      service.setWindowPresentation(windowPresentation),
+      service.setRecordingsDirectory(recordingsDirectory)
+    ]);
+    const restarted = new SettingsService(settingsPath, defaultRecordingsDirectory);
+    expect(await restarted.load()).toMatchObject({
+      wirelessProfiles: [profile], windowPresentation, recordingsDirectory,
+      preset: { resolution: "1080p", videoBitrateMbps: 8, audioMode: "device" }
+    });
+    const copy = service.get();
+    copy.wirelessProfiles![0].name = "外部修改";
+    expect(service.get().wirelessProfiles![0].name).toBe("我的手机");
+  });
 });

@@ -157,6 +157,78 @@ describe("实时预览 Worker", () => {
     );
   });
 
+  it.each([
+    ["相同尺寸", 480, 640],
+    ["旋转后的尺寸", 640, 480]
+  ])("断线恢复为%s时保留最后画面，新帧绘制后才更新画布和布局", async (_label, width, height) => {
+    const postMessage = jest.fn();
+    let paintedFrame: VideoFrame | undefined;
+    let nextFrame = { close: jest.fn() } as unknown as VideoFrame;
+    const drawImage = jest.fn((frame: VideoFrame) => { paintedFrame = frame; });
+    class FakeVideoDecoder {
+      decodeQueueSize = 0;
+      configure = jest.fn();
+      close = jest.fn();
+      constructor(private readonly init: { output(frame: VideoFrame): void }) {}
+      decode(): void { this.init.output(nextFrame); }
+    }
+    (globalThis as any).postMessage = postMessage;
+    (globalThis as any).VideoDecoder = FakeVideoDecoder;
+    (globalThis as any).EncodedVideoChunk = class {};
+    await import("../../src/renderer/live-preview-worker");
+    const handleCommand = (globalThis as any).onmessage as (event: MessageEvent) => void;
+    const port = {
+      postMessage: jest.fn(), start: jest.fn(), close: jest.fn(),
+      onmessage: null as ((event: MessageEvent) => void) | null
+    };
+    let canvasWidth = 0;
+    let canvasHeight = 0;
+    /** 与真实 Canvas 一致：即使赋相同尺寸也会擦除原像素。 */
+    const resize = jest.fn(() => { paintedFrame = undefined; });
+    const canvas = {
+      get width() { return canvasWidth; },
+      set width(value: number) { canvasWidth = value; resize(); },
+      get height() { return canvasHeight; },
+      set height(value: number) { canvasHeight = value; resize(); },
+      getContext: () => ({ drawImage })
+    };
+    const config = { type: "config", codec: "avc1.64001f", data: Uint8Array.from([0, 0, 1, 0x67]).buffer };
+    const packet = { type: "packet", sequence: 1, ptsUs: 1_000_000, keyFrame: true,
+      data: Uint8Array.from([0, 0, 1, 0x65]).buffer };
+    handleCommand({ data: { type: "connect", port } } as unknown as MessageEvent);
+    handleCommand({ data: { type: "canvas", canvas } } as unknown as MessageEvent);
+    port.onmessage?.({ data: { type: "session", width: 480, height: 640 } } as MessageEvent);
+    port.onmessage?.({ data: config } as MessageEvent);
+    port.onmessage?.({ data: packet } as MessageEvent);
+    jest.runOnlyPendingTimers();
+    const frozenFrame = paintedFrame;
+    expect(frozenFrame).toBe(nextFrame);
+    expect(resize).toHaveBeenCalledTimes(2);
+    postMessage.mockClear();
+
+    port.onmessage?.({ data: { type: "error", message: "设备断开" } } as MessageEvent);
+    handleCommand({ data: { type: "retry" } } as unknown as MessageEvent);
+    port.onmessage?.({ data: { type: "session", width, height } } as MessageEvent);
+    port.onmessage?.({ data: config } as MessageEvent);
+    expect(paintedFrame).toBe(frozenFrame);
+    expect(canvas).toMatchObject({ width: 480, height: 640 });
+    expect(resize).toHaveBeenCalledTimes(2);
+    expect(postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "size" }));
+
+    nextFrame = { close: jest.fn() } as unknown as VideoFrame;
+    port.onmessage?.({ data: { ...packet, sequence: 2 } } as MessageEvent);
+    expect(paintedFrame).toBe(frozenFrame);
+    jest.runOnlyPendingTimers();
+    expect(paintedFrame).toBe(nextFrame);
+    expect(canvas).toMatchObject({ width, height });
+    expect(resize).toHaveBeenCalledTimes(width === 480 ? 2 : 4);
+    expect(drawImage).toHaveBeenLastCalledWith(nextFrame, 0, 0, width, height);
+    if (width !== 480) {
+      expect(postMessage).toHaveBeenCalledWith({ type: "size", width, height });
+    }
+    expect(postMessage).toHaveBeenCalledWith({ type: "status", status: "live", message: undefined });
+  });
+
   it("WebCodecs 不可用时重试仍保持不可用并停止上游投递", async () => {
     /** Worker 状态消息。 */
     const postMessage = jest.fn();

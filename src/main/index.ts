@@ -17,6 +17,9 @@ import type {
 } from "../shared/types";
 import { AdbClient } from "./adb/client";
 import { DeviceService } from "./adb/device-service";
+import { WirelessService } from "./adb/wireless-service";
+import { MirrorRecoveryService } from "./mirroring/recovery-service";
+import { WindowController } from "./window-controller";
 import { inspectMp4File } from "./files/mp4";
 import { registerIpcHandlers } from "./ipc";
 import {
@@ -74,6 +77,11 @@ let deviceService: DeviceService | undefined;
 let recordingService: RecordingService | undefined;
 /** 全局镜像服务。 */
 let mirroringService: MirroringService | undefined;
+let wirelessService: WirelessService | undefined;
+let recoveryService: MirrorRecoveryService | undefined;
+let windowController: WindowController | undefined;
+/** 去重系统关闭与窗口关闭同时触发的收尾。 */
+let windowCloseTask: Promise<void> | undefined;
 
 /** 仅向存活的主窗口发送事件。 */
 function sendToRenderer(
@@ -125,9 +133,10 @@ function createMainWindow(
     }
   });
   window.on("close", (event) => {
-    if (!allowWindowClose && recording.isBusy()) {
+    if (!allowWindowClose) {
       event.preventDefault();
-      void confirmRecordingClose(window, recording);
+      if (recording.isBusy()) void confirmRecordingClose(window, recording);
+      else void finishWindowClose(window);
     }
   });
   /** 窗口重新激活时同步外部新增或删除的录屏。 */
@@ -139,7 +148,6 @@ function createMainWindow(
     window.removeListener("focus", refreshLibrary);
     mainWindow = null;
   });
-  void window.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   return window;
 }
 
@@ -161,9 +169,18 @@ async function confirmRecordingClose(
 
   if (result.response === 0) {
     await recording.stop();
+    await finishWindowClose(window);
+  }
+}
+
+/** 关闭前保存最后一次窗口移动，完成后再允许原生窗口退出。 */
+function finishWindowClose(window: BrowserWindow): Promise<void> {
+  windowCloseTask ??= (async () => {
+    await windowController?.flush().catch(() => undefined);
     allowWindowClose = true;
     window.close();
-  }
+  })();
+  return windowCloseTask;
 }
 
 /** 初始化主进程服务与事件桥接。 */
@@ -202,6 +219,12 @@ async function initializeApplication(): Promise<void> {
   const adb = new AdbClient(runtime.adb);
   /** 设备轮询服务。 */
   const devices = new DeviceService(adb);
+  const wireless = new WirelessService({
+    adb,
+    refreshDevices: () => devices.refresh(),
+    getProfiles: () => settings.get().wirelessProfiles ?? [],
+    saveProfiles: async (profiles) => { await settings.setWirelessProfiles(profiles); }
+  });
   /** 主窗口只读实时预览分发器。 */
   const preview = new LivePreviewHub(LIVE_PREVIEW_WORKER_WEBPACK_ENTRY);
   /** 配套 scrcpy-server 单流会话工厂。 */
@@ -232,21 +255,70 @@ async function initializeApplication(): Promise<void> {
         await library.registerCompletedFile(filePath, metadata)
       )
   });
+  const recovery = new MirrorRecoveryService({
+    mirroring,
+    recording,
+    resolveDevice: async (target, signal) => {
+      const snapshot = await devices.refresh();
+      if (signal.aborted) return undefined;
+      if (target.connectionType !== "network") {
+        return snapshot.find((device) => device.serial === target.serial && device.status === "available");
+      }
+      if (!target.identity) return undefined;
+      const current = snapshot.filter((device) => device.identity === target.identity && device.status === "available");
+      if (current.length === 1) return current[0];
+      const profile = (settings.get().wirelessProfiles ?? []).find((item) => item.identity === target.identity);
+      return profile ? wireless.reconnect(profile, signal) : undefined;
+    }
+  });
   preview.onStatusChanged(({ status, message }) =>
     mirroring.handlePreviewStatus(status, message)
   );
   registerMediaHandler(library);
   mainWindow = createMainWindow(recording, library);
+  const presentation = new WindowController({
+    window: mainWindow,
+    preferences: settings.get().windowPresentation,
+    getWorkArea: (bounds) => screen.getDisplayMatching(bounds).workArea,
+    savePreferences: (value) => settings.setWindowPresentation(value)
+  });
+  windowController = presentation;
+  await presentation.initialize().catch((error: unknown) => {
+    console.warn("恢复窗口布局失败，将使用当前窗口继续启动", error);
+  });
+  const fitWindow = (): void => { void presentation.fitToWorkArea().catch(() => undefined); };
+  screen.on("display-removed", fitWindow);
+  screen.on("display-metrics-changed", fitWindow);
+  mainWindow.once("closed", () => {
+    screen.removeListener("display-removed", fitWindow);
+    screen.removeListener("display-metrics-changed", fitWindow);
+    presentation.dispose();
+  });
   deviceService = devices;
   recordingService = recording;
   mirroringService = mirroring;
+  wirelessService = wireless;
+  recoveryService = recovery;
   cleanupIpc = registerIpcHandlers(mainWindow, {
     devices,
     recording,
     mirroring,
     library,
     settings,
-    preview
+    preview,
+    wireless,
+    recovery,
+    windowPresentation: presentation
+  });
+
+  wireless.onChanged((state) => {
+    if (mainWindow) sendToRenderer(mainWindow.webContents, ipcChannels.wirelessStateChanged, state);
+  });
+  recovery.onChanged((state) => {
+    if (mainWindow) sendToRenderer(mainWindow.webContents, ipcChannels.mirrorRecoveryStateChanged, state);
+  });
+  presentation.onChanged((state) => {
+    if (mainWindow) sendToRenderer(mainWindow.webContents, ipcChannels.windowPresentationChanged, state);
   });
 
   devices.onChanged((snapshot) => {
@@ -305,6 +377,8 @@ async function initializeApplication(): Promise<void> {
       );
     }
   });
+  /** 先注册全部接口再加载页面，避免首屏请求早于主进程就绪。 */
+  await mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   await devices.start();
 }
 
@@ -315,13 +389,16 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (!allowWindowClose && recordingService?.isBusy() && mainWindow) {
+  if (!allowWindowClose && mainWindow) {
     event.preventDefault();
-    void confirmRecordingClose(mainWindow, recordingService);
+    if (recordingService?.isBusy()) void confirmRecordingClose(mainWindow, recordingService);
+    else void finishWindowClose(mainWindow);
   }
 });
 
 app.on("will-quit", () => {
+  recoveryService?.close();
+  wirelessService?.cancel();
   mirroringService?.close();
   cleanupIpc?.();
   deviceService?.stop();

@@ -1,5 +1,7 @@
 import {
   parseAdbDeviceList,
+  parseAdbMdnsServices,
+  parseAndroidIdentity,
   parseAndroidProperties
 } from "../../src/main/adb/parser";
 
@@ -55,5 +57,36 @@ describe("ADB 输出解析", () => {
       androidVersion: "14",
       apiLevel: 34
     });
+  });
+
+  it("将 TLS 服务序列号识别为网络设备", () => {
+    const devices = parseAdbDeviceList(
+      "List of devices attached\nadb-REAL-random._adb-tls-connect._tcp device model:Pixel_8\n"
+    );
+    expect(devices[0].connectionType).toBe("network");
+  });
+
+  it("区分配对和连接端口，兼容 IPv6 并忽略无效服务", () => {
+    expect(parseAdbMdnsServices([
+      "List of discovered mdns services",
+      "adb-pair _adb-tls-pairing._tcp 192.168.1.20:41000",
+      "adb-REAL-random _adb-tls-connect._tcp 192.168.1.20:39000",
+      "adb-v6 _adb-tls-connect._tcp. [fe80::1]:39001",
+      "adb-old _adb._tcp 192.168.1.20:5555",
+      "adb-invalid _adb-tls-connect._tcp 192.168.1.20:99999",
+      "adb-duplicate _adb-tls-connect._tcp 192.168.1.20:39000"
+    ].join("\n"))).toEqual([
+      { name: "adb-pair", type: "pairing", endpoint: { host: "192.168.1.20", port: 41000 } },
+      { name: "adb-duplicate", type: "connection", endpoint: { host: "192.168.1.20", port: 39000 } },
+      { name: "adb-v6", type: "connection", endpoint: { host: "fe80::1", port: 39001 } }
+    ]);
+  });
+
+  it("优先采用实机序列号，缺失时使用无线标识，不以型号充当身份", () => {
+    expect(parseAndroidIdentity("[ro.serialno]: [REAL]\n[persist.adb.wifi.guid]: [GUID]")).toBe("serial:REAL");
+    expect(parseAndroidIdentity("[ro.serialno]: [unknown]\n[persist.adb.wifi.guid]: [GUID]")).toBe("wifi:GUID");
+    expect(parseAndroidIdentity("[ro.serialno]: [unknown]\n[ro.boot.serialno]: [BOOT]")).toBe("serial:BOOT");
+    expect(parseAndroidIdentity("[ro.product.model]: [Pixel 8]")).toBeUndefined();
+    expect(parseAndroidProperties("[ro.serialno]: [REAL]")).toMatchObject({ identity: "serial:REAL" });
   });
 });

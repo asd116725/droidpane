@@ -1,3 +1,5 @@
+import type { SavedWindowBounds, WindowMode } from "../shared/connection";
+
 /** 显示器工作区尺寸。 */
 export interface WindowWorkAreaSize {
   /** 工作区宽度。 */
@@ -35,5 +37,24 @@ export function resolveMainWindowBounds(
     height: Math.min(preferredWindowSize.height, workArea.height),
     minWidth: Math.min(minimumWindowSize.width, workArea.width),
     minHeight: Math.min(minimumWindowSize.height, workArea.height)
+  };
+}
+
+/** 将窗口完整收回当前显示器工作区，同时遵守当前模式的最小尺寸。 */
+export function constrainWindowBounds(
+  bounds: SavedWindowBounds,
+  workArea: SavedWindowBounds,
+  mode: WindowMode
+): SavedWindowBounds {
+  const minimum = mode === "compact"
+    ? { width: 280, height: 420 }
+    : minimumWindowSize;
+  const width = Math.min(workArea.width, Math.max(minimum.width, bounds.width));
+  const height = Math.min(workArea.height, Math.max(minimum.height, bounds.height));
+  return {
+    x: Math.max(workArea.x, Math.min(bounds.x, workArea.x + workArea.width - width)),
+    y: Math.max(workArea.y, Math.min(bounds.y, workArea.y + workArea.height - height)),
+    width,
+    height
   };
 }
