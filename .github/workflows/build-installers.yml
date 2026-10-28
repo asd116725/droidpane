@@ -50,7 +50,7 @@ jobs:
           test "$actual_version" = "$expected_version"
           expected_arch="${{ matrix.arch }}"
           if [ "$expected_arch" = "x64" ]; then expected_arch="x86_64"; fi
-          lipo -verify_arch "$expected_arch" "$app_path/Contents/MacOS/DroidPane"
+          lipo "$app_path/Contents/MacOS/DroidPane" -verify_arch "$expected_arch"
           test -d "$app_path/Contents/Resources/licenses"
       - name: 上传 DMG
         uses: actions/upload-artifact@v4
