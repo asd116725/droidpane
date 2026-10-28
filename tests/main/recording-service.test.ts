@@ -1,5 +1,6 @@
 /** @jest-environment node */
 
+import path from "node:path";
 import type {
   DeviceInfo,
   MirrorState,
@@ -189,7 +190,7 @@ describe("录制服务集成", () => {
     expect(mirror.session.detachRecorder).toHaveBeenCalledWith(muxer);
     expect(muxer.finalize).toHaveBeenCalledTimes(1);
     expect(dependencies.createMuxer).toHaveBeenCalledWith(
-      "/videos/DroidPane/Pixel_8_Pro_2026-07-31_143208.mp4",
+      path.join("/videos/DroidPane", "Pixel_8_Pro_2026-07-31_143208.mp4"),
       true,
       expect.objectContaining({ onVideoPacket: expect.any(Function) })
     );
