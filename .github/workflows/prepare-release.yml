@@ -1,0 +1,74 @@
+name: 准备 Release 附件
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已创建的 Release 草稿标签
+        required: true
+        type: string
+      macos_run:
+        description: 已通过的 macOS 构建运行 ID
+        required: true
+        type: string
+      windows_run:
+        description: 已通过的 Windows 构建运行 ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  assets:
+    name: 校验并上传草稿附件
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - name: 确认版本与草稿
+        run: |
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+      - name: 下载 macOS 产物
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.macos_run }}
+          pattern: DroidPane-macOS-*
+          path: artifacts/macos
+      - name: 下载 Windows 产物
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.windows_run }}
+          name: DroidPane-Windows-x64
+          path: artifacts/windows
+      - name: 整理安装包与校验和
+        run: |
+          version=$(node -p "require('./package.json').version")
+          mkdir release-assets
+          for arch in arm64 x64; do
+            mapfile -t files < <(find "artifacts/macos/DroidPane-macOS-$arch" -name '*.dmg' -type f)
+            test "${#files[@]}" -eq 1
+            cp "${files[0]}" "release-assets/DroidPane-$version-macos-$arch.dmg"
+          done
+          mapfile -t files < <(find artifacts/windows -name '*.msi' -type f)
+          test "${#files[@]}" -eq 1
+          cp "${files[0]}" "release-assets/DroidPane-$version-windows-x64.msi"
+          cd release-assets
+          sha256sum *.dmg *.msi > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+      - name: 上传到 Release 草稿
+        run: gh release upload "$RELEASE_TAG" release-assets/*
+      - name: 保留校验文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: Release-checksums
+          path: release-assets/SHA256SUMS.txt
+          if-no-files-found: error
