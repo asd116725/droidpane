@@ -2,6 +2,11 @@ name: 构建安装包
 
 on:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 要构建的分支、标签或提交
+        required: false
+        type: string
   push:
     tags:
       - "v*"
@@ -17,6 +22,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - name: 配置 Node.js
         uses: actions/setup-node@v4
         with:
@@ -57,6 +64,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - name: 配置 Node.js
         uses: actions/setup-node@v4
         with:
@@ -65,7 +74,7 @@ jobs:
       - name: 安装依赖
         run: npm ci --no-audit --no-fund
       - name: 安装 WiX Toolset v3
-        run: choco install wixtoolset --version=3.14.0 -y --no-progress
+        run: choco install wixtoolset --version=3.14.1.20250415 -y --no-progress
       - name: 检查类型与代码规范
         run: npm run typecheck && npm run lint
       - name: 运行测试
